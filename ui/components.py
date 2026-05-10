@@ -38,6 +38,54 @@ def render_upload_preview(uploaded_file):
             st.code('\n'.join(preview_lines), language='csv')
 
 
+def render_model_summary_table(payback_data, model_finance):
+    import pandas as pd
+
+    rows = []
+    for model_data in payback_data["models"]:
+        model_name = model_data["name"]
+        total_profit = model_data["total_row"]["value"]
+        payback = model_finance[model_name].get("payback")
+        payback_str = f"{payback:.1f}" if payback else "未回本"
+
+        rows.append({
+            "设备型号": model_name,
+            "总收益（万欧元）": round(total_profit, 2),
+            "回收周期（月）": payback_str,
+        })
+
+    df = pd.DataFrame(rows)
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+def render_financial_indicators_table(payback_data, sorted_year_months, model_name):
+    import pandas as pd
+
+    model_rows = {}
+    for model_data in payback_data["models"]:
+        if model_data["name"] == model_name:
+            for row in model_data["rows"]:
+                model_rows[row["label"]] = row["values"]
+            break
+
+    indicator_keys = [
+        ("平均购电电价 (€/kWh)", f"{model_name} 平均购电电价（€/kWh）"),
+        ("平均放电电价 (€/kWh)", f"{model_name} 平均放电电价（€/kWh）"),
+        ("表观电价差 (€/kWh)", f"{model_name} 表观电价差（€/kWh）"),
+        ("度电成本 (€/kWh)", f"{model_name} 度电成本(3年折旧按月分摊)（€/kWh）"),
+    ]
+
+    table_data = {}
+    for display_name, full_label in indicator_keys:
+        if full_label in model_rows:
+            values = model_rows[full_label]
+            table_data[display_name] = [round(v, 4) for v in values]
+
+    if table_data:
+        df = pd.DataFrame(table_data, index=sorted_year_months)
+        st.dataframe(df, use_container_width=True)
+
+
 def generate_zip_buffer(data_results):
     from outputs.excel_generator import generate_price_excel, generate_power_matrix_excel, generate_payback_excel
     from core.config import MODEL_LIST
