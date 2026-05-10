@@ -1,58 +1,7 @@
 import plotly.graph_objects as go
-import plotly.express as px
 from plotly.subplots import make_subplots
-import numpy as np
 from datetime import datetime
 from core.config import MODEL_LIST
-
-
-def plot_price_curves_interactive(price_rows, times):
-    time_minutes = []
-    time_labels = []
-    for t in times:
-        h, m, s = map(int, t.split(':'))
-        time_minutes.append(h * 60 + m)
-        time_labels.append(t)
-
-    month_data = {1: [], 2: []}
-    for row in price_rows:
-        date_str = row[0]
-        prices = row[1:1 + len(times)]
-        try:
-            date = datetime.strptime(date_str, "%Y-%m-%d").date()
-        except ValueError:
-            continue
-        if date.month in month_data:
-            month_data[date.month].append((date_str, prices))
-
-    figures = {}
-    for month in [1, 2]:
-        data = month_data[month]
-        if not data:
-            continue
-
-        fig = go.Figure()
-        for date_str, prices in data:
-            fig.add_trace(go.Scatter(
-                x=time_labels,
-                y=prices,
-                mode='lines',
-                name=date_str,
-                line=dict(width=1.5),
-            ))
-
-        fig.update_layout(
-            title=f"{month}月 每日电价曲线汇总",
-            xaxis_title="时刻",
-            yaxis_title="电价 (€/kWh)",
-            hovermode="x unified",
-            legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02),
-            height=500,
-            margin=dict(r=150),
-        )
-        figures[f"price_curves_month_{month}"] = fig
-
-    return figures
 
 
 def plot_price_heatmap(price_rows, times):
@@ -73,6 +22,44 @@ def plot_price_heatmap(price_rows, times):
         xaxis_title="时刻",
         yaxis_title="日期",
         height=max(400, len(dates) * 20),
+    )
+
+    return fig
+
+
+def plot_price_curves_for_month(price_rows, times, target_month):
+    month_data = []
+    for row in price_rows:
+        date_str = row[0]
+        prices = row[1:1 + len(times)]
+        try:
+            date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if date.strftime("%Y-%m") == target_month:
+            month_data.append((date_str, prices))
+
+    if not month_data:
+        return None
+
+    fig = go.Figure()
+    for date_str, prices in month_data:
+        fig.add_trace(go.Scatter(
+            x=times,
+            y=prices,
+            mode='lines',
+            name=date_str,
+            line=dict(width=1.5),
+        ))
+
+    fig.update_layout(
+        title=f"{target_month} 每日电价曲线（共 {len(month_data)} 天）",
+        xaxis_title="时刻",
+        yaxis_title="电价 (€/kWh)",
+        hovermode="x unified",
+        height=500,
+        legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02),
+        margin=dict(r=150),
     )
 
     return fig
@@ -106,22 +93,31 @@ def plot_power_schedule_heatmap(power_matrix_data, times, model_name):
     return fig
 
 
-def plot_cumulative_cashflow(model_finance, sorted_year_months):
-    fig = go.Figure()
-
+def plot_cumulative_cashflow_and_profit(model_finance, sorted_year_months):
     colors = {"S1": "#2196F3", "S2": "#4CAF50", "X3": "#FF9800"}
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
 
     for model in MODEL_LIST:
         if model in model_finance:
             cum_cf = model_finance[model]["cum_cashflow"]
+            monthly_profit = model_finance[model]["monthly_profit"]
+
             fig.add_trace(go.Scatter(
-                x=sorted_year_months,
-                y=cum_cf,
+                x=sorted_year_months, y=cum_cf,
                 mode='lines+markers',
                 name=f"{model} 累计现金流",
                 line=dict(width=3, color=colors.get(model, "#333")),
-                marker=dict(size=8),
-            ))
+                marker=dict(size=6),
+            ), secondary_y=False)
+
+            fig.add_trace(go.Scatter(
+                x=sorted_year_months, y=monthly_profit,
+                mode='lines+markers',
+                name=f"{model} 月度净收益",
+                line=dict(width=2, color=colors.get(model, "#333"), dash='dot'),
+                marker=dict(size=4, symbol='triangle-up'),
+            ), secondary_y=True)
 
     payback_annotations = []
     for model in MODEL_LIST:
@@ -139,130 +135,57 @@ def plot_cumulative_cashflow(model_finance, sorted_year_months):
                     ay=-40,
                 ))
 
-    fig.add_hline(y=0, line_dash="dash", line_color="red", opacity=0.5)
+    fig.add_hline(y=0, line_dash="dash", line_color="red", opacity=0.5, secondary_y=False)
 
     fig.update_layout(
-        title="累计现金流趋势",
-        xaxis_title="月份",
-        yaxis_title="累计现金流（万欧元）",
+        title="累计现金流与月度净收益",
         hovermode="x unified",
-        height=450,
+        height=500,
         annotations=payback_annotations,
     )
 
+    fig.update_yaxes(title_text="累计现金流（万欧元）", secondary_y=False)
+    fig.update_yaxes(title_text="月度净收益（万欧元）", secondary_y=True)
+
     return fig
 
 
-def plot_monthly_profit_bar(model_finance, sorted_year_months):
-    fig = go.Figure()
-
+def plot_financial_indicators(payback_data, sorted_year_months, model_name):
     colors = {"S1": "#2196F3", "S2": "#4CAF50", "X3": "#FF9800"}
 
-    for model in MODEL_LIST:
-        if model in model_finance:
-            monthly_profit = model_finance[model]["monthly_profit"]
-            fig.add_trace(go.Bar(
+    model_rows = {}
+    for model_data in payback_data["models"]:
+        if model_data["name"] == model_name:
+            for row in model_data["rows"]:
+                model_rows[row["label"]] = row["values"]
+            break
+
+    indicator_keys = [
+        ("平均购电电价 (€/kWh)", f"{model_name} 平均购电电价（€/kWh）"),
+        ("平均放电电价 (€/kWh)", f"{model_name} 平均放电电价（€/kWh）"),
+        ("表观电价差 (€/kWh)", f"{model_name} 表观电价差（€/kWh）"),
+        ("度电成本 (€/kWh)", f"{model_name} 度电成本(3年折旧按月分摊)（€/kWh）"),
+    ]
+
+    fig = go.Figure()
+
+    for display_name, full_label in indicator_keys:
+        if full_label in model_rows:
+            fig.add_trace(go.Scatter(
                 x=sorted_year_months,
-                y=monthly_profit,
-                name=f"{model} 月净收益",
-                marker_color=colors.get(model, "#333"),
-                text=[f"{v:.2f}" for v in monthly_profit],
-                textposition='outside',
-                textfont=dict(size=10),
+                y=model_rows[full_label],
+                mode='lines+markers',
+                name=display_name,
+                line=dict(width=2),
+                marker=dict(size=5),
             ))
 
     fig.update_layout(
-        title="各型号月度净收益对比",
+        title=f"{model_name} 财务指标趋势",
         xaxis_title="月份",
-        yaxis_title="净收益（万欧元）",
-        barmode='group',
-        height=450,
-        hovermode="x unified",
-    )
-
-    return fig
-
-
-def plot_lcos_comparison(payback_data, sorted_year_months):
-    fig = go.Figure()
-
-    colors = {"S1": "#2196F3", "S2": "#4CAF50", "X3": "#FF9800"}
-
-    for model_data in payback_data["models"]:
-        model_name = model_data["name"]
-        for row in model_data["rows"]:
-            if "度电成本" in row["label"]:
-                fig.add_trace(go.Scatter(
-                    x=sorted_year_months,
-                    y=row["values"],
-                    mode='lines+markers',
-                    name=f"{model_name} LCOS",
-                    line=dict(width=2.5, color=colors.get(model_name, "#333")),
-                    marker=dict(size=6),
-                ))
-
-    fig.update_layout(
-        title="度电成本 (LCOS) 趋势对比",
-        xaxis_title="月份",
-        yaxis_title="度电成本 (€/kWh)",
+        yaxis_title="€/kWh",
         hovermode="x unified",
         height=400,
     )
-
-    return fig
-
-
-def plot_model_kpi_summary(model_finance, payback_data):
-    models = []
-    paybacks = []
-    total_revenues = []
-    colors_list = []
-
-    color_map = {"S1": "#2196F3", "S2": "#4CAF50", "X3": "#FF9800"}
-
-    for model_data in payback_data["models"]:
-        model_name = model_data["name"]
-        models.append(model_name)
-        payback_val = model_finance[model_name].get("payback", 36)
-        if payback_val is None:
-            payback_val = 36
-        paybacks.append(payback_val)
-        total_revenues.append(model_data["total_row"]["value"])
-        colors_list.append(color_map.get(model_name, "#333"))
-
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-
-    fig.add_trace(
-        go.Bar(
-            x=models,
-            y=paybacks,
-            name="回收周期（月）",
-            marker_color=colors_list,
-            text=[f"{p:.1f}月" if p else "未回本" for p in paybacks],
-            textposition='auto',
-        ),
-        secondary_y=False,
-    )
-
-    fig.add_trace(
-        go.Scatter(
-            x=models,
-            y=total_revenues,
-            mode='lines+markers',
-            name="总收益（万欧元）",
-            line=dict(width=3, color='#E91E63'),
-            marker=dict(size=12, symbol='diamond'),
-        ),
-        secondary_y=True,
-    )
-
-    fig.update_layout(
-        title="设备型号综合对比",
-        height=400,
-        hovermode="x",
-    )
-
-    fig.update_yaxes(title_text="回收周期（月）", secondary_y=False)
-    fig.update_yaxes(title_text="总收益（万欧元）", secondary_y=True)
 
     return fig
