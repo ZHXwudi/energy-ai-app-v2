@@ -1,12 +1,15 @@
 import streamlit as st
 import pandas as pd
+from datetime import datetime
 from core.config import MODEL_LIST
-from ui.components import render_kpi_row, render_csv_template_download, render_upload_preview, generate_zip_buffer
+from ui.components import (
+    render_kpi_row, render_csv_template_download, render_upload_preview,
+    generate_zip_buffer, render_model_summary_table, render_financial_indicators_table,
+)
 from outputs.chart_generator import (
-    plot_price_curves_interactive, plot_price_heatmap,
-    plot_power_schedule_heatmap, plot_cumulative_cashflow,
-    plot_monthly_profit_bar, plot_lcos_comparison,
-    plot_model_kpi_summary,
+    plot_price_curves_for_month, plot_price_heatmap,
+    plot_power_schedule_heatmap, plot_cumulative_cashflow_and_profit,
+    plot_financial_indicators,
 )
 
 
@@ -67,6 +70,18 @@ def build_summary_kpis(data_results):
     return kpis
 
 
+def get_available_months(price_rows):
+    months = set()
+    for row in price_rows:
+        date_str = row[0]
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            months.add(dt.strftime("%Y-%m"))
+        except ValueError:
+            continue
+    return sorted(months)
+
+
 def render_dashboard(data_results):
     st.markdown("---")
     st.header("📊 分析结果看板")
@@ -78,63 +93,96 @@ def render_dashboard(data_results):
     model_finance = data_results["model_finance"]
     payback_data = data_results["payback_data"]
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "📈 模型对比", "💰 现金流分析", "⚡ 电价分析",
-        "🔋 充放电调度", "📊 月度明细", "📦 报表下载"
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📈 电价分析", "💰 收益与现金流", "📊 财务指标",
+        "🔋 充放电调度", "📦 报表下载"
     ])
 
     with tab1:
-        st.subheader("设备型号综合对比")
-        fig_summary = plot_model_kpi_summary(model_finance, payback_data)
-        st.plotly_chart(fig_summary, use_container_width=True)
-
-        st.subheader("度电成本 (LCOS) 趋势")
-        fig_lcos = plot_lcos_comparison(payback_data, result["sorted_year_months"])
-        st.plotly_chart(fig_lcos, use_container_width=True)
-
-    with tab2:
-        st.subheader("累计现金流趋势")
-        fig_cf = plot_cumulative_cashflow(model_finance, result["sorted_year_months"])
-        st.plotly_chart(fig_cf, use_container_width=True)
-
-        st.subheader("月度净收益对比")
-        fig_profit = plot_monthly_profit_bar(model_finance, result["sorted_year_months"])
-        st.plotly_chart(fig_profit, use_container_width=True)
-
-        col1, col2 = st.columns(2)
-        for i, model in enumerate(MODEL_LIST):
-            with [col1, col2][i % 2]:
-                fin = model_finance.get(model, {})
-                payback = fin.get("payback")
-                payback_str = f"{payback:.1f} 个月" if payback else "未回本"
-                st.metric(
-                    label=f"{model} 回收周期",
-                    value=payback_str,
-                    delta=None,
-                )
-                if fin.get("cum_cashflow"):
-                    st.caption(f"最终累计现金流: {fin['cum_cashflow'][-1]:.2f} 万欧元")
-
-    with tab3:
         st.subheader("电价热力图")
         fig_heatmap = plot_price_heatmap(result["price_rows"], result["times"])
         st.plotly_chart(fig_heatmap, use_container_width=True)
 
-        st.subheader("电价曲线图")
-        price_figures = plot_price_curves_interactive(result["price_rows"], result["times"])
-        for key, fig in price_figures.items():
-            month_label = key.replace("price_curves_", "").replace("month_", "")
-            st.caption(f"{month_label}月")
-            st.plotly_chart(fig, use_container_width=True)
+        st.markdown("---")
+        st.subheader("📅 月度电价曲线")
+        st.caption("点击下方按钮选择月份，查看该月每一天的电价曲线")
 
-        st.subheader("电价数据表")
-        df_prices = pd.DataFrame(result["price_rows"], columns=result["price_headers"])
-        st.dataframe(df_prices, use_container_width=True, height=300)
+        available_months = get_available_months(result["price_rows"])
+
+        if available_months:
+            month_cols = st.columns(min(len(available_months), 6))
+            selected_month = st.session_state.get("selected_price_month", available_months[0])
+
+            for i, month in enumerate(available_months):
+                col = month_cols[i % len(month_cols)]
+                btn_type = "primary" if month == selected_month else "secondary"
+                if col.button(month, key=f"month_btn_{month}", type=btn_type, use_container_width=True):
+                    st.session_state["selected_price_month"] = month
+                    st.rerun()
+
+            selected_month = st.session_state.get("selected_price_month", available_months[0])
+
+            fig_month = plot_price_curves_for_month(
+                result["price_rows"], result["times"], selected_month
+            )
+            if fig_month:
+                st.plotly_chart(fig_month, use_container_width=True)
+            else:
+                st.warning(f"{selected_month} 没有有效数据")
+
+            st.subheader("电价数据表")
+            df_prices = pd.DataFrame(result["price_rows"], columns=result["price_headers"])
+            st.dataframe(df_prices, use_container_width=True, height=300)
+
+    with tab2:
+        st.subheader("📋 投资回收与收益汇总")
+        render_model_summary_table(payback_data, model_finance)
+
+        st.markdown("---")
+        st.subheader("📈 累计现金流与月度净收益")
+        fig_cf = plot_cumulative_cashflow_and_profit(model_finance, result["sorted_year_months"])
+        st.plotly_chart(fig_cf, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("📊 月度收益明细表")
+        profit_table = {"月份": result["sorted_year_months"]}
+        for model in MODEL_LIST:
+            if model in model_finance:
+                profit_table[f"{model} 月度净收益（万欧元）"] = [
+                    round(v, 2) for v in model_finance[model]["monthly_profit"]
+                ]
+                profit_table[f"{model} 累计现金流（万欧元）"] = [
+                    round(v, 2) for v in model_finance[model]["cum_cashflow"]
+                ]
+        if profit_table:
+            df_profit = pd.DataFrame(profit_table)
+            st.dataframe(df_profit, use_container_width=True, hide_index=True)
+
+    with tab3:
+        st.subheader("📊 财务指标趋势")
+        st.caption("平均购电电价 / 平均放电电价 / 表观电价差 / 度电成本(3年折旧按月分摊)")
+
+        model_tabs_fin = st.tabs(MODEL_LIST)
+        for i, model in enumerate(MODEL_LIST):
+            with model_tabs_fin[i]:
+                col_chart, col_table = st.columns([3, 2])
+
+                with col_chart:
+                    fig_indicators = plot_financial_indicators(
+                        payback_data, result["sorted_year_months"], model
+                    )
+                    st.plotly_chart(fig_indicators, use_container_width=True)
+
+                with col_table:
+                    st.markdown(f"**{model} 月度数据表**")
+                    render_financial_indicators_table(
+                        payback_data, result["sorted_year_months"], model
+                    )
 
     with tab4:
-        model_tabs = st.tabs(MODEL_LIST)
+        model_tabs_schedule = st.tabs(MODEL_LIST)
         for i, model in enumerate(MODEL_LIST):
-            with model_tabs[i]:
+            with model_tabs_schedule[i]:
                 power_data = result["model_results"][model]["power_matrix_data"]
                 fig_schedule = plot_power_schedule_heatmap(
                     power_data, result["times"], model
@@ -145,15 +193,6 @@ def render_dashboard(data_results):
                 st.dataframe(df_power, use_container_width=True, height=300)
 
     with tab5:
-        for model_data in payback_data["models"]:
-            st.subheader(f"{model_data['name']} 月度指标")
-            rows_data = {}
-            for row in model_data["rows"]:
-                rows_data[row["label"]] = row["values"]
-            df_monthly = pd.DataFrame(rows_data, index=result["sorted_year_months"]).T
-            st.dataframe(df_monthly, use_container_width=True)
-
-    with tab6:
         st.subheader("📦 一键下载所有报表")
         st.markdown("包含以下文件：")
         for f in ["电价透视表.xlsx", "充放电功率矩阵_S1.xlsx",
