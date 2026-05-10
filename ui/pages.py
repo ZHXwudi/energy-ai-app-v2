@@ -1,13 +1,11 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
 from core.config import MODEL_LIST
 from ui.components import (
-    render_kpi_row, render_csv_template_download, render_upload_preview,
+    render_kpi_row, render_csv_template_download,
     generate_zip_buffer, render_model_summary_table, render_financial_indicators_table,
 )
 from outputs.chart_generator import (
-    plot_price_curves_for_month, plot_price_heatmap,
     plot_power_schedule_heatmap, plot_cumulative_cashflow_and_profit,
     plot_financial_indicators,
 )
@@ -70,18 +68,6 @@ def build_summary_kpis(data_results):
     return kpis
 
 
-def get_available_months(price_rows):
-    months = set()
-    for row in price_rows:
-        date_str = row[0]
-        try:
-            dt = datetime.strptime(date_str, "%Y-%m-%d")
-            months.add(dt.strftime("%Y-%m"))
-        except ValueError:
-            continue
-    return sorted(months)
-
-
 def render_dashboard(data_results):
     st.markdown("---")
     st.header("📊 分析结果看板")
@@ -93,48 +79,19 @@ def render_dashboard(data_results):
     model_finance = data_results["model_finance"]
     payback_data = data_results["payback_data"]
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📈 电价分析", "💰 收益与现金流", "📊 财务指标",
+    st.markdown("---")
+    st.subheader("📋 电价数据预览（前20条）")
+    preview_df = pd.DataFrame(result["price_rows"][:20], columns=result["price_headers"])
+    st.dataframe(preview_df, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "💰 收益与现金流", "📊 财务指标",
         "🔋 充放电调度", "📦 报表下载"
     ])
 
     with tab1:
-        st.subheader("电价热力图")
-        fig_heatmap = plot_price_heatmap(result["price_rows"], result["times"])
-        st.plotly_chart(fig_heatmap, use_container_width=True)
-
-        st.markdown("---")
-        st.subheader("📅 月度电价曲线")
-        st.caption("点击下方按钮选择月份，查看该月每一天的电价曲线")
-
-        available_months = get_available_months(result["price_rows"])
-
-        if available_months:
-            month_cols = st.columns(min(len(available_months), 6))
-            selected_month = st.session_state.get("selected_price_month", available_months[0])
-
-            for i, month in enumerate(available_months):
-                col = month_cols[i % len(month_cols)]
-                btn_type = "primary" if month == selected_month else "secondary"
-                if col.button(month, key=f"month_btn_{month}", type=btn_type, use_container_width=True):
-                    st.session_state["selected_price_month"] = month
-                    st.rerun()
-
-            selected_month = st.session_state.get("selected_price_month", available_months[0])
-
-            fig_month = plot_price_curves_for_month(
-                result["price_rows"], result["times"], selected_month
-            )
-            if fig_month:
-                st.plotly_chart(fig_month, use_container_width=True)
-            else:
-                st.warning(f"{selected_month} 没有有效数据")
-
-            st.subheader("电价数据表")
-            df_prices = pd.DataFrame(result["price_rows"], columns=result["price_headers"])
-            st.dataframe(df_prices, use_container_width=True, height=300)
-
-    with tab2:
         st.subheader("📋 投资回收与收益汇总")
         render_model_summary_table(payback_data, model_finance)
 
@@ -158,7 +115,7 @@ def render_dashboard(data_results):
             df_profit = pd.DataFrame(profit_table)
             st.dataframe(df_profit, use_container_width=True, hide_index=True)
 
-    with tab3:
+    with tab2:
         st.subheader("📊 财务指标趋势")
         st.caption("平均购电电价 / 平均放电电价 / 表观电价差 / 度电成本(3年折旧按月分摊)")
 
@@ -179,20 +136,46 @@ def render_dashboard(data_results):
                         payback_data, result["sorted_year_months"], model
                     )
 
-    with tab4:
+    with tab3:
         model_tabs_schedule = st.tabs(MODEL_LIST)
         for i, model in enumerate(MODEL_LIST):
             with model_tabs_schedule[i]:
                 power_data = result["model_results"][model]["power_matrix_data"]
-                fig_schedule = plot_power_schedule_heatmap(
-                    power_data, result["times"], model
-                )
-                st.plotly_chart(fig_schedule, use_container_width=True)
+                headers = result["power_matrix_headers"]
 
-                df_power = pd.DataFrame(power_data, columns=result["power_matrix_headers"])
-                st.dataframe(df_power, use_container_width=True, height=300)
+                col_heatmap, col_table = st.columns([3, 2])
 
-    with tab5:
+                with col_heatmap:
+                    fig_schedule = plot_power_schedule_heatmap(
+                        power_data, result["times"], model
+                    )
+                    st.plotly_chart(fig_schedule, use_container_width=True)
+
+                with col_table:
+                    st.markdown(f"**{model} 每日运行数据**")
+
+                    date_col_idx = headers.index("日期")
+                    charge_cap_idx = headers.index("充电容量(kWh)")
+                    soc_left_idx = headers.index("剩余电量(kWh)")
+                    charge_e_idx = headers.index("当天充电量(kWh)")
+                    discharge_e_idx = headers.index("当天放电量(kWh)")
+                    cycle_idx = headers.index("循环次数(次)")
+
+                    summary_rows = []
+                    for row in power_data:
+                        summary_rows.append({
+                            "日期": row[date_col_idx],
+                            "充电容量(kWh)": round(row[charge_cap_idx], 1),
+                            "剩余电量(kWh)": round(row[soc_left_idx], 1),
+                            "当天充电量(kWh)": round(row[charge_e_idx], 1),
+                            "当天放电量(kWh)": round(row[discharge_e_idx], 1),
+                            "循环次数": round(row[cycle_idx], 3),
+                        })
+
+                    df_summary = pd.DataFrame(summary_rows)
+                    st.dataframe(df_summary, use_container_width=True, hide_index=True, height=400)
+
+    with tab4:
         st.subheader("📦 一键下载所有报表")
         st.markdown("包含以下文件：")
         for f in ["电价透视表.xlsx", "充放电功率矩阵_S1.xlsx",
