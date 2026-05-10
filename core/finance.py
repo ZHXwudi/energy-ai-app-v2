@@ -270,6 +270,13 @@ def calculate_finance(model_results, sorted_year_months, unit_count, exchange_ra
          if model_results[m]["monthly_stats"][ym]["total_charge_energy"] > 0 else 0.0),
         ("平均放电电价（€/kWh）", lambda m, ym: (model_results[m]["monthly_stats"][ym]["weighted_discharge_price"] / model_results[m]["monthly_stats"][ym]["total_discharge_energy"])
          if model_results[m]["monthly_stats"][ym]["total_discharge_energy"] > 0 else 0.0),
+        ("表观电价差（€/kWh）", lambda m, ym: (
+            (model_results[m]["monthly_stats"][ym]["weighted_discharge_price"] / model_results[m]["monthly_stats"][ym]["total_discharge_energy"])
+            if model_results[m]["monthly_stats"][ym]["total_discharge_energy"] > 0 else 0.0
+        ) - (
+            (model_results[m]["monthly_stats"][ym]["weighted_charge_price"] / model_results[m]["monthly_stats"][ym]["total_charge_energy"])
+            if model_results[m]["monthly_stats"][ym]["total_charge_energy"] > 0 else 0.0
+        )),
     ]
 
     for model in MODEL_LIST:
